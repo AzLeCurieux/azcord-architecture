@@ -8,6 +8,7 @@ workspace "AzCord" "Architecture de la stack self-hosted AzCord (Revolt/Stoat v0
 
     azcord = softwareSystem "AzCord" "Plateforme de messagerie instantanée self-hosted basée sur Revolt/Stoat" {
 
+      # ── Point d'entrée ─────────────────────────────────────────────
       caddy = container "caddy" "Reverse proxy HTTPS avec TLS automatique (ACME). Route les requêtes entrantes par préfixe de chemin vers les services backend." "Caddy 2" {
         tags "Proxy"
       }
@@ -16,10 +17,12 @@ workspace "AzCord" "Architecture de la stack self-hosted AzCord (Revolt/Stoat v0
         tags "Optional"
       }
 
+      # ── Frontend ───────────────────────────────────────────────────
       web = container "web" "Single Page Application React (for-web). Interface utilisateur AzCord. Port interne: 5000." "React / Nginx" {
         tags "Frontend"
       }
 
+      # ── Services applicatifs ───────────────────────────────────────
       api = container "api" "API REST principale Stoat v0.11.1. Gère les comptes, canaux, messages, permissions. Port interne: 14702. Route Caddy: /api/*" "Rust" {
         tags "Backend"
       }
@@ -56,6 +59,7 @@ workspace "AzCord" "Architecture de la stack self-hosted AzCord (Revolt/Stoat v0
         tags "Job"
       }
 
+      # ── Infrastructure ─────────────────────────────────────────────
       mongodb = container "MongoDB" "Base de données documentaire principale. Stocke messages, utilisateurs, canaux, serveurs. Volume persisté: data/db. Port: 27017." "MongoDB 7" {
         tags "Database"
       }
@@ -78,34 +82,178 @@ workspace "AzCord" "Architecture de la stack self-hosted AzCord (Revolt/Stoat v0
 
     }
 
+    # ── Relations externes ─────────────────────────────────────────────
+    utilisateur -> azcord.caddy "HTTPS / WSS" "TLS 443"
+    utilisateur -> azcord.cloudflared "HTTPS (via tunnel)" "TLS"
+    azcord.cloudflared -> azcord.caddy "Tunnel interne" "HTTP"
+
+    # ── Routage Caddy ─────────────────────────────────────────────────
+    azcord.caddy -> azcord.web          "/* → :5000" "HTTP"
+    azcord.caddy -> azcord.api          "/api/* → :14702" "HTTP"
+    azcord.caddy -> azcord.events       "/ws → :14703" "HTTP/WS"
+    azcord.caddy -> azcord.autumn       "/autumn/* → :14704" "HTTP"
+    azcord.caddy -> azcord.january      "/january/* → :14705" "HTTP"
+    azcord.caddy -> azcord.gifbox       "/gifbox/* → :14706" "HTTP"
+    azcord.caddy -> azcord.voiceIngress "/ingress/* → :8500" "HTTP"
+    azcord.caddy -> azcord.livekit      "/livekit/* → :7880" "HTTP/WS"
+
+    # ── MongoDB ────────────────────────────────────────────────────────
+    azcord.mongodb -> azcord.api          "Lit / Écrit" "TCP 27017"
+    azcord.mongodb -> azcord.events       "Lit / Écrit" "TCP 27017"
+    azcord.mongodb -> azcord.autumn       "Lit / Écrit" "TCP 27017"
+    azcord.mongodb -> azcord.crond        "Lit / Écrit" "TCP 27017"
+    azcord.mongodb -> azcord.pushd        "Lit / Écrit" "TCP 27017"
+    azcord.mongodb -> azcord.voiceIngress "Lit / Écrit" "TCP 27017"
+
+    # ── KeyDB ──────────────────────────────────────────────────────────
+    azcord.keydb -> azcord.api          "Cache / pub-sub" "TCP 6379"
+    azcord.keydb -> azcord.events       "Pub-sub" "TCP 6379"
+    azcord.keydb -> azcord.pushd        "Cache" "TCP 6379"
+    azcord.keydb -> azcord.livekit      "Pub-sub" "TCP 6379"
+
+    # ── RabbitMQ ───────────────────────────────────────────────────────
+    azcord.rabbitmq -> azcord.api          "AMQP" "TCP 5672"
+    azcord.rabbitmq -> azcord.pushd        "AMQP" "TCP 5672"
+    azcord.rabbitmq -> azcord.voiceIngress "AMQP" "TCP 5672"
+
+    # ── MinIO ──────────────────────────────────────────────────────────
+    azcord.minio -> azcord.autumn       "S3 API" "HTTP"
+    azcord.minio -> azcord.crond        "S3 API" "HTTP"
+    azcord.minio -> azcord.createbuckets "S3 API (init)" "HTTP"
+
+    # ── Vocal ──────────────────────────────────────────────────────────
+    azcord.voiceIngress -> azcord.livekit "Signalement WebRTC" "TCP 7881"
+
+    # ── Init job ───────────────────────────────────────────────────────
+    azcord.createbuckets -> azcord.autumn "Bucket prêt (depend_on)" "Init"
+
   }
 
   views {
 
+    # Vue Contexte Système (L1)
     systemContext azcord "SystemContext" "Vue d'ensemble : qui utilise AzCord et comment" {
       include *
       autoLayout tb 300 100
     }
 
+    # Vue Containers (L2) — la stack Docker Compose complète
     container azcord "Containers" "Tous les services Docker Compose de la stack AzCord" {
       include *
       autoLayout tb 200 100
     }
 
+    # Vue filtrée : flux réseau entrant
+    container azcord "EntryPoints" "Points d'entrée et routage" {
+      include utilisateur
+      include azcord.caddy
+      include azcord.cloudflared
+      include azcord.web
+      include azcord.api
+      include azcord.events
+      include azcord.autumn
+      include azcord.january
+      include azcord.gifbox
+      include azcord.voiceIngress
+      include azcord.livekit
+      autoLayout lr 150 80
+    }
+
+    # Vue filtrée : infrastructure de données
+    container azcord "DataInfra" "Infrastructure de données et messagerie" {
+      include azcord.api
+      include azcord.events
+      include azcord.autumn
+      include azcord.crond
+      include azcord.pushd
+      include azcord.voiceIngress
+      include azcord.mongodb
+      include azcord.keydb
+      include azcord.rabbitmq
+      include azcord.minio
+      include azcord.livekit
+      autoLayout tb 200 100
+    }
+
     styles {
-      element "Person" { shape person background #1a73e8 color #ffffff fontSize 14 }
-      element "Software System" { background #1a73e8 color #ffffff }
-      element "Container" { background #2d6a9f color #ffffff }
-      element "Proxy" { background #0d6e6e color #ffffff shape roundedbox }
-      element "Frontend" { background #6750a4 color #ffffff shape webbrowser }
-      element "Backend" { background #1e5799 color #ffffff shape roundedbox }
-      element "Database" { background #2d6a9f color #ffffff shape cylinder }
-      element "Cache" { background #c95b0c color #ffffff shape cylinder }
-      element "MessageBroker" { background #7b2d8b color #ffffff shape pipe }
-      element "Storage" { background #1a6b3a color #ffffff shape cylinder }
-      element "Voice" { background #c62828 color #ffffff shape roundedbox }
-      element "Job" { background #5d4037 color #ffffff shape component }
-      element "Optional" { background #546e7a color #ffffff border dashed }
+
+      element "Person" {
+        shape person
+        background #1a73e8
+        color #ffffff
+        fontSize 14
+      }
+
+      element "Software System" {
+        background #1a73e8
+        color #ffffff
+      }
+
+      element "Container" {
+        background #2d6a9f
+        color #ffffff
+      }
+
+      element "Proxy" {
+        background #0d6e6e
+        color #ffffff
+        shape roundedbox
+      }
+
+      element "Frontend" {
+        background #6750a4
+        color #ffffff
+        shape webbrowser
+      }
+
+      element "Backend" {
+        background #1e5799
+        color #ffffff
+        shape roundedbox
+      }
+
+      element "Database" {
+        background #2d6a9f
+        color #ffffff
+        shape cylinder
+      }
+
+      element "Cache" {
+        background #c95b0c
+        color #ffffff
+        shape cylinder
+      }
+
+      element "MessageBroker" {
+        background #7b2d8b
+        color #ffffff
+        shape pipe
+      }
+
+      element "Storage" {
+        background #1a6b3a
+        color #ffffff
+        shape cylinder
+      }
+
+      element "Voice" {
+        background #c62828
+        color #ffffff
+        shape roundedbox
+      }
+
+      element "Job" {
+        background #5d4037
+        color #ffffff
+        shape component
+      }
+
+      element "Optional" {
+        background #546e7a
+        color #ffffff
+        border dashed
+      }
+
     }
 
   }
