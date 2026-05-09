@@ -14,6 +14,73 @@ L'approche retenue est le **modèle C4** (Simon Brown), décrit en [Structurizr 
 
 ---
 
+## Automatisation via MCP + Claude Code
+
+Ce POC a été produit en branchant le serveur MCP officiel de Structurizr sur [Claude Code](https://claude.ai/code), ce qui permet de valider et d'exporter le DSL sans quitter le terminal.
+
+### Principe
+
+[Structurizr expose un serveur MCP](https://docs.structurizr.com/ai/mcp) (Model Context Protocol) public. Une fois enregistré dans Claude Code, ses outils deviennent disponibles directement dans la session : validation du DSL, export PlantUML, export Mermaid.
+
+```
+Claude Code  ──→  MCP Structurizr  ──→  validate / export-c4plantuml / export-mermaid
+                  mcp.structurizr.com
+```
+
+### Configuration
+
+Ajouter le serveur MCP au projet (une seule fois) :
+
+```bash
+claude mcp add structurizr-mcp --transport http https://mcp.structurizr.com/mcp
+```
+
+Vérifier que la connexion est active :
+
+```bash
+claude mcp list
+# structurizr-mcp: https://mcp.structurizr.com/mcp (HTTP) - ✔ Connected
+```
+
+Le serveur expose les outils suivants :
+
+| Outil | Description |
+|-------|-------------|
+| `validate` | Vérifie la syntaxe du DSL et remonte les erreurs |
+| `parse` | Parse le DSL et retourne le workspace JSON |
+| `inspect` | Inspecte le contenu du workspace |
+| `export-c4plantuml` | Exporte une vue en C4-PlantUML |
+| `export-plantuml` | Exporte une vue en PlantUML standard |
+| `export-mermaid` | Exporte une vue en Mermaid |
+
+### Workflow
+
+1. Écrire ou modifier `azcord.dsl`
+2. Demander à Claude Code de valider — il appelle `validate` via MCP et remonte les erreurs de syntaxe directement
+3. Une fois valide, exporter les vues souhaitées via `export-c4plantuml` ou `export-mermaid`
+4. Les fichiers `.puml` et `.mmd` générés peuvent être rendus dans n'importe quel outil compatible PlantUML/Mermaid
+
+### Régénérer les diagrammes
+
+Le serveur MCP est aussi appelable directement en HTTP si besoin de scripter hors de Claude Code :
+
+```bash
+# Valider le DSL
+curl -s -X POST https://mcp.structurizr.com/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d "{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"name\":\"validate\",\"arguments\":{\"dsl\":$(jq -Rs . < azcord.dsl)}},\"id\":1}"
+
+# Exporter la vue Containers en C4-PlantUML
+curl -s -X POST https://mcp.structurizr.com/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d "{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"name\":\"export-c4plantuml\",\"arguments\":{\"dsl\":$(jq -Rs . < azcord.dsl),\"viewKey\":\"Containers\"}},\"id\":2}" \
+  | jq -r '.result.content[0].text | fromjson.definition'
+```
+
+---
+
 ## Modèle C4 — Niveaux de vue
 
 Le modèle C4 organise l'architecture en couches :
@@ -98,73 +165,6 @@ Les dépendances entre les services applicatifs et l'infrastructure sous-jacente
 Le modèle complet est dans [`azcord.dsl`](azcord.dsl) — format [Structurizr DSL](https://docs.structurizr.com/dsl).
 
 Pour l'explorer interactivement, coller le contenu sur [playground.structurizr.com](https://playground.structurizr.com/).
-
----
-
-## Automatisation via MCP + Claude Code
-
-Ce POC a été produit en branchant le serveur MCP officiel de Structurizr sur [Claude Code](https://claude.ai/code), ce qui permet de valider et d'exporter le DSL sans quitter le terminal.
-
-### Principe
-
-[Structurizr expose un serveur MCP](https://docs.structurizr.com/ai/mcp) (Model Context Protocol) public. Une fois enregistré dans Claude Code, ses outils deviennent disponibles directement dans la session : validation du DSL, export PlantUML, export Mermaid.
-
-```
-Claude Code  ──→  MCP Structurizr  ──→  validate / export-c4plantuml / export-mermaid
-                  mcp.structurizr.com
-```
-
-### Configuration
-
-Ajouter le serveur MCP au projet (une seule fois) :
-
-```bash
-claude mcp add structurizr-mcp --transport http https://mcp.structurizr.com/mcp
-```
-
-Vérifier que la connexion est active :
-
-```bash
-claude mcp list
-# structurizr-mcp: https://mcp.structurizr.com/mcp (HTTP) - ✔ Connected
-```
-
-Le serveur expose les outils suivants :
-
-| Outil | Description |
-|-------|-------------|
-| `validate` | Vérifie la syntaxe du DSL et remonte les erreurs |
-| `parse` | Parse le DSL et retourne le workspace JSON |
-| `inspect` | Inspecte le contenu du workspace |
-| `export-c4plantuml` | Exporte une vue en C4-PlantUML |
-| `export-plantuml` | Exporte une vue en PlantUML standard |
-| `export-mermaid` | Exporte une vue en Mermaid |
-
-### Workflow
-
-1. Écrire ou modifier `azcord.dsl`
-2. Demander à Claude Code de valider — il appelle `validate` via MCP et remonte les erreurs de syntaxe directement
-3. Une fois valide, exporter les vues souhaitées via `export-c4plantuml` ou `export-mermaid`
-4. Les fichiers `.puml` et `.mmd` générés peuvent être rendus dans n'importe quel outil compatible PlantUML/Mermaid
-
-### Régénérer les diagrammes
-
-Le serveur MCP est aussi appelable directement en HTTP si besoin de scripter hors de Claude Code :
-
-```bash
-# Valider le DSL
-curl -s -X POST https://mcp.structurizr.com/mcp \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -d "{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"name\":\"validate\",\"arguments\":{\"dsl\":$(jq -Rs . < azcord.dsl)}},\"id\":1}"
-
-# Exporter la vue Containers en C4-PlantUML
-curl -s -X POST https://mcp.structurizr.com/mcp \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -d "{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"name\":\"export-c4plantuml\",\"arguments\":{\"dsl\":$(jq -Rs . < azcord.dsl),\"viewKey\":\"Containers\"}},\"id\":2}" \
-  | jq -r '.result.content[0].text | fromjson.definition'
-```
 
 ---
 
